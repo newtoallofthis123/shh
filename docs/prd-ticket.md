@@ -57,8 +57,9 @@ Secondary user: a developer running agents, CLIs, scripts, or local apps that ne
 - `ls -p <profile>` annotates each effective name with its source profile and override status.
 - `load --only` and `load --except` accept both comma-separated names and repeated flags.
 - v1 uses normal macOS Keychain permission behavior first. Do not require explicit ACL customization for the initial implementation.
-- Release builds should be signed so macOS can identify the `shh` binary consistently across runs.
-- Development can use an in-memory backend or a dev-only Keychain service prefix to avoid touching real user secrets.
+- v1 is a personal tool. Default install (`just install` → `cargo install --path .`) produces an unsigned / ad-hoc-signed binary; the user accepts that macOS will re-prompt for Keychain access after rebuilds and reinstalls. **This is the only install path covered by v1 testing and acceptance criteria.**
+- `just install-signed` is provided for users with a Developer ID who want stable Keychain trust across rebuilds, and can be paired with `SHH_KEYCHAIN=data-protection` to use the modern keychain. Shipped as a convenience; not exercised by v1 tests.
+- Development uses a dev-only Keychain service prefix (`SHH_SERVICE_PREFIX=shh-dev`) to avoid touching real user secrets. An in-memory backend exists only behind `#[cfg(test)]` for unit tests and is not reachable from the shipped binary.
 
 ## Command Scope
 
@@ -72,8 +73,10 @@ shh ls [-p <profile>]
 shh profiles
 shh load <PATH> [-p <profile>] [--all] [--only <names>...] [--except <names>...] [--dry-run]
 shh export [-p <profile>]
-shh run [-p <profile>] -- <cmd> [args...]
+shh unset [-p <profile>]
+shh run [-p <profile>] [--clean] -- <cmd> [args...]
 shh doctor keychain
+shh completions <shell>
 ```
 
 ## Functional Requirements
@@ -120,19 +123,22 @@ shh doctor keychain
 
 - Lists discovered profile names.
 - Includes `default` when default entries exist.
-- Discovers profiles by enumerating Keychain items with `service` prefix `shh:`.
+- Discovers profiles by enumerating `kSecClassGenericPassword` items with `kSecReturnAttributes = true`, `kSecReturnData = false`, `kSecMatchLimit = kSecMatchLimitAll`, then filtering client-side for `service` strings prefixed with `shh:` and extracting the suffix. `SecItemCopyMatching` does not support prefix queries on `kSecAttrService`, so the broad-fetch + filter is required.
+- Attribute-only enumeration does not trigger Keychain permission prompts and is not filtered by per-item ACLs for items the calling binary itself wrote. `profiles` and `ls` therefore run silently. Permission prompts are scoped to commands that read secret values (`get`, `export`, `run`).
 
 ### `load`
 
 - Parses a `.env` file.
 - Supports v1 dotenv syntax:
   - blank lines
-  - comments
+  - comments (full-line `#` and trailing `#` outside quotes)
   - `NAME=value`
   - `export NAME=value`
-  - single-quoted values
-  - double-quoted values with common escapes
-  - unquoted values trimmed of surrounding whitespace
+  - single-quoted values (literal, no escapes, no interpolation)
+  - double-quoted values with common escapes (`\n`, `\t`, `\r`, `\\`, `\"`) and `${VAR}` interpolation against already-parsed entries in the same file
+  - unquoted values trimmed of surrounding whitespace, with `${VAR}` interpolation
+  - backslash-newline line continuation inside double-quoted values
+- Explicitly out of scope for v1: command substitution (`$(...)`), backtick substitution, default-value expansion (`${VAR:-default}`).
 - Rejects invalid env names and reports them without storing them.
 - In TTY mode with no selection flags, shows an interactive checklist of parsed names.
 - In non-interactive mode, requires one of `--all`, `--only`, or `--except`.
@@ -161,13 +167,33 @@ eval "$(shh export -p work)"
 - Requires `--` before the child command.
 - Resolves the requested profile using default-plus-overlay rules.
 - Spawns the child command with the current process env inherited and resolved profile vars overlaid.
+- With `--clean`, spawns the child with only resolved profile vars plus a minimal safe baseline (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`, `LC_*`, `TMPDIR`) — does not inherit other parent env.
 - Does not mutate the parent shell.
 - Returns the child command's exit code.
+
+### `unset`
+
+- Resolves the requested profile using default-plus-overlay rules.
+- Prints shell-safe `unset NAME` lines for every resolved name only when stdout is not a TTY.
+- Refuses TTY output with guidance:
+
+```text
+eval "$(shh unset -p work)"
+```
+
+- Intended as the inverse of `shh export` for deactivating a previously loaded profile in the current shell.
+
+### `completions`
+
+- Prints shell completion script for `bash`, `zsh`, or `fish` to stdout.
+- Generated via `clap_complete`.
 
 ### `doctor keychain`
 
 - Performs a local macOS-only Keychain smoke test.
-- Writes, reads, lists, and deletes a test-scoped entry.
+- Reports which Keychain store is active (file-based vs data-protection) per `SHH_KEYCHAIN`.
+- Reports the signing identity of the running binary (unsigned, ad-hoc, Developer ID) and whether it is suitable for the active store.
+- Writes, reads, lists, and deletes a test-scoped entry against the active store.
 - Uses a reserved profile such as `__shh_doctor__`.
 - Never touches non-test profiles.
 - Reports whether Keychain access works and whether macOS permission was denied or cancelled.
@@ -196,9 +222,10 @@ Decisions:
 - Accept repeated `--only` and `--except` flags as well as comma-separated names.
 - Use `nixpkgs-unstable` for the Nix flake input.
 - Use the Rust toolchain from `nixpkgs-unstable` directly unless a future reproducibility issue requires an overlay.
-- Use `dialoguer` for v1 interactive prompts unless a small implementation spike exposes a blocker.
+- Use `inquire` for v1 interactive prompts (hidden password input and filterable multi-select for `load`).
 - Use standard Keychain access first. Explicit ACL customization is not a v1 requirement.
-- Support a development-only in-memory backend with `SHH_BACKEND=memory`.
+- Ship `run --clean`, `unset`, and shell completions in v1.
+- Do not ship an env-var-toggleable storage backend in the release binary. The in-memory store exists only for tests.
 - Support a development-only service prefix override with `SHH_SERVICE_PREFIX=shh-dev`.
 - Add `doctor keychain` as the user-facing way to validate Keychain access and explain macOS prompts.
 
@@ -206,12 +233,12 @@ Open questions:
 - None for the current PRD pass.
 
 Risk:
-- macOS may prompt more often than expected, especially after binary updates or unsigned local builds.
-- Keychain profile enumeration may be slower or less filterable than desired.
-- Shell quoting mistakes could break `eval "$(shh export)"` or expose malformed values.
-- Dotenv parsing can sprawl; v1 should intentionally avoid interpolation and multiline values unless required.
-- `run` still inherits unrelated secrets already present in the parent environment.
-- Development builds can accidentally touch real Keychain entries unless tests default to the memory store and smoke tests use reserved profiles.
+- macOS will prompt on every secret-value read (`get`, `export`, `run`) after each binary rebuild or reinstall, because v1 is unsigned / ad-hoc signed and "Always Allow" trust does not survive an identity change. Accepted as the personal-tool tradeoff.
+- macOS 26.4 introduced stricter authorization checks (CVE-2026-28864) that can return `errSecAuthFailed` from `SecItemCopyMatching` against the legacy file-based login keychain under some conditions. Default v1 backend is the file-based keychain (works unsigned); users with a Developer ID signed build can opt into the data-protection backend via `SHH_KEYCHAIN=data-protection` to sidestep this.
+- Shell quoting mistakes could break `eval "$(shh export)"` or `eval "$(shh unset)"` or expose malformed values.
+- Dotenv parsing must stop at the syntax declared in `load` — no command substitution, no `${VAR:-default}`.
+- `run` without `--clean` inherits unrelated secrets already present in the parent environment. The user should prefer `--clean` when isolation matters.
+- Development builds can accidentally touch real Keychain entries unless tests use the `#[cfg(test)]` in-memory store and smoke tests use reserved profiles or `SHH_SERVICE_PREFIX`.
 
 ## Suggested Internal Interfaces
 
@@ -267,17 +294,19 @@ Do not make explicit ACL mutation a hard v1 dependency. The older macOS ACL APIs
 
 Most development and tests should avoid the real Keychain.
 
-Supported development knobs:
+Supported runtime knobs:
 
 ```text
-SHH_BACKEND=memory
-SHH_SERVICE_PREFIX=shh-dev
+SHH_KEYCHAIN=file | data-protection      # default: file
+SHH_SERVICE_PREFIX=shh-dev               # optional dev namespace
 ```
 
-- `SHH_BACKEND=memory` uses an in-memory store for command behavior tests and local CLI iteration.
-- `SHH_SERVICE_PREFIX=shh-dev` uses the real Keychain but stores entries under a dev prefix instead of `shh:<profile>`.
-- Release builds should ignore or avoid documenting development-only knobs for normal users.
-- Real Keychain integration is still tested through `just smoke-keychain` and `shh doctor keychain`.
+- `SHH_KEYCHAIN=file` uses the legacy file-based login keychain. Works with unsigned and ad-hoc-signed binaries. Default.
+- `SHH_KEYCHAIN=data-protection` uses the modern data-protection keychain via `kSecUseDataProtectionKeychain = true`. Requires the running binary to be Developer ID signed; uses the team ID as the default access group, no custom provisioning profile needed for items shh owns. Sidesteps the macOS 26.4 file-based regression and gives stable trust across rebuilds with the same signing identity.
+- The two keychains are separate stores. Items written under one mode are invisible in the other. v1 does not provide automatic migration — switching mode means starting fresh or running `load` again. A `shh migrate` command is a possible follow-up.
+- `SHH_SERVICE_PREFIX=shh-dev` uses the configured Keychain but stores entries under a dev prefix instead of `shh:<profile>`. Useful for iterating on the real adapter without polluting `shh:` entries.
+- The in-memory `SecretStore` is gated behind `#[cfg(test)]` and is not reachable from the shipped binary — no env-var or flag toggles the storage backend at runtime. This avoids the footgun of a stale shell-rc env silently redirecting writes to /dev/null.
+- Real Keychain integration is tested through `just smoke-keychain` and `shh doctor keychain`.
 
 ### User Messaging
 
@@ -337,6 +366,8 @@ just lint
 just test
 just build
 just run -- <args>
+just install
+just install-signed
 just smoke-keychain
 just ci
 ```
@@ -349,10 +380,14 @@ Expected command behavior:
 - `test` runs the test suite.
 - `build` creates a debug binary.
 - `run -- <args>` runs the CLI through cargo.
+- `install` runs `cargo install --path .` to produce an unsigned/ad-hoc-signed binary in `~/.cargo/bin/shh`. This is the v1 supported install path.
+- `install-signed` runs a release build, codesigns the binary with the identity from `SHH_SIGN_IDENTITY` (`Developer ID Application: ...`) using `--timestamp --options runtime`, and copies it to `~/.cargo/bin/shh`. Provided for users with a Developer ID who want stable Keychain trust across rebuilds; not exercised by v1 tests.
 - `smoke-keychain` performs a local macOS-only set/get/list/delete test against a clearly test-scoped profile.
 - `ci` runs formatting, linting, and tests.
 
 The smoke test must use a reserved profile such as `__shh_smoke__` and clean up after itself.
+
+For v1, only the unsigned `just install` path is tested. `just install-signed` ships as a convenience but is not covered by acceptance criteria — signed-install verification is a follow-up if the personal-use workflow shifts toward frequent rebuilds.
 
 ## Prompt Dependency Research
 
@@ -360,12 +395,12 @@ The smoke test must use a reserved profile such as `__shh_smoke__` and clean up 
 
 Good current Rust options:
 
-- `dialoguer` - mature and focused. It directly supports password input, input validation, single and multi-select prompts, and fuzzy select. This is the lowest-risk v1 choice because it matches the required surface without pulling the project toward a richer TUI.
-- `inquire` - feature-rich and modern. It supports text, password, select, multi-select, validators, autocomplete, and richer prompt customization. Good fit if `.env` selection needs filtering, help text, or more polished validation behavior.
-- `cliclack` - modern Clack-style UX. It supports password, select, multi-select, filter mode, progress bars, logging helpers, and themes. Good fit if the CLI should feel more designed, but it is more opinionated than `dialoguer`.
-- `requestty` - Inquirer.js-style prompts. It supports password and multi-select builders, but it is a heavier abstraction than v1 needs unless the command flow becomes more questionnaire-like.
+- `inquire` - feature-rich and modern. Supports text, password, select, multi-select with filter/search, validators, autocomplete, and help text. Best fit for `.env` import where the user may be scrolling and toggling 20+ names — filter-as-you-type matters.
+- `dialoguer` - mature and focused. Directly supports password input and multi-select but lacks built-in filter on the multi-select. Lower polish for `load` UX.
+- `cliclack` - modern Clack-style UX. More opinionated than needed.
+- `requestty` - Inquirer.js-style. Heavier abstraction than v1 needs.
 
-Recommendation: use `dialoguer` for v1. It covers hidden input and checklist import cleanly, keeps implementation small, and leaves room to switch to `inquire` or `cliclack` later if the interactive flow becomes a product differentiator.
+Recommendation: use `inquire` for v1. The filterable multi-select pays for itself in `load`, and the hidden password prompt covers `set`.
 
 ## Acceptance Criteria
 
@@ -378,12 +413,16 @@ Recommendation: use `dialoguer` for v1. It covers hidden input and checklist imp
 - `shh load .env -p work` lets an interactive user select names before import.
 - `shh load .env -p work --only OPENAI_API_KEY --only ANTHROPIC_API_KEY --dry-run` reports add/update names and writes nothing.
 - `shh load .env -p work --except PORT,DEBUG --dry-run` excludes both names and writes nothing.
-- `shh ls -p work` lists effective names without values and annotates default/profile/override source.
-- `shh profiles` lists profiles discovered from Keychain services.
+- `shh ls -p work` lists effective names without values and annotates default/profile/override source, and runs without triggering Keychain permission prompts.
+- `shh profiles` lists profiles discovered from Keychain services without triggering Keychain permission prompts.
+- `shh run -p work --clean -- env` shows resolved profile vars plus only the minimal safe baseline (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `LANG`, `LC_*`, `TMPDIR`).
+- `eval "$(shh unset -p work)"` removes the previously exported names from the current shell.
+- `shh completions zsh > _shh` writes a working zsh completion script.
 - `shh doctor keychain` writes, reads, lists, and deletes only a reserved diagnostic entry.
 - Keychain denial and user-cancelled permission flows produce clear non-secret error messages.
 - `nix develop` opens a shell with the Rust toolchain and `just` available.
 - `just ci` runs format checks, lint checks, and tests.
+- `just install` produces a working `shh` binary in `~/.cargo/bin/` via the unsigned/ad-hoc path. Subsequent commands (`shh doctor keychain`, `shh set`, `shh get`) work against the file-based keychain.
 - `just smoke-keychain` verifies the real Keychain adapter on macOS without leaving test entries behind.
 - Unit tests cover env-name validation, shell quoting, profile overlay behavior, dotenv parsing, and load selection behavior.
 - Command tests cover TTY refusal paths for `get` and `export`.
@@ -419,8 +458,6 @@ Recommendation: use `dialoguer` for v1. It covers hidden input and checklist imp
 
 ## Future Follow-Ups
 
-- `run --clean` to avoid inheriting the parent environment.
-- `unset` helper output for deactivating loaded secrets in the current shell.
-- Optional shell completions.
-- Broader dotenv syntax if real `.env` files require it.
 - Explicit Keychain ACL customization if standard signed-binary Keychain behavior causes too many prompts.
+- `shh migrate` to copy items between the file-based and data-protection keychain stores when a user upgrades to a signed build.
+- Broader dotenv syntax (e.g. `${VAR:-default}`) if real `.env` files require it.
