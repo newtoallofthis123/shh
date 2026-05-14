@@ -20,7 +20,7 @@ Conscious because: TTY guards must be applied uniformly, interactive prompts hav
 
 ## Success criteria
 
-Each PRD acceptance criterion (lines 407–428 of `docs/prd-ticket.md`) is testable. In particular:
+Each relevant PRD functional requirement in `docs/prd-ticket.md` is testable. In particular:
 
 - `shh get NAME` to a TTY exits non-zero with guidance, never prints the value.
 - `shh get NAME | cat` prints the raw value (no trailing newline appended unexpectedly — match PRD example `pbcopy`).
@@ -28,7 +28,7 @@ Each PRD acceptance criterion (lines 407–428 of `docs/prd-ticket.md`) is testa
 - `shh ls` and `shh profiles` never call `get` — they use only `list_names` / `list_profiles`.
 - `shh ls -p work` output format: `NAME    <source>` per line, where source is `default`, `<profile>`, or `<profile> overrides default`.
 - `shh load FILE` with no flags in a TTY shows an `inquire::MultiSelect` of parsed names; non-TTY without `--all|--only|--except` exits with usage error.
-- `shh load --dry-run` prints `would add NAME` or `would update NAME` per resolved selection and writes nothing.
+- `shh load FILE --dry-run --all` (or `--only`/`--except`, or TTY checklist selection) prints `would add NAME` or `would update NAME` per resolved selection and writes nothing. In non-TTY mode, `--dry-run` alone is not a selector and exits with usage error.
 - `shh run -p work -- env` spawns child with inherited env + overlaid resolved vars; `--clean` builds a fresh env with only `PATH, HOME, USER, SHELL, TERM, LANG, LC_*, TMPDIR` plus resolved vars; exit code matches child.
 - `shh completions zsh` writes a script to stdout.
 - `shh doctor keychain` writes/reads/lists/deletes under reserved profile `__shh_doctor__`, prints active store + signing identity + result lines, and cleans up even on partial failure.
@@ -38,8 +38,15 @@ Each PRD acceptance criterion (lines 407–428 of `docs/prd-ticket.md`) is testa
 
 ### E.1 — Dispatcher and store injection
 
-- **Goal:** `run()` in `main.rs` constructs a `Box<dyn SecretStore>` (always `KeychainStore::from_env()` for the real binary; integration tests substitute via a `pub fn run_with_store(cli: Cli, store: &dyn SecretStore) -> Result<()>` shim exposed from `lib.rs`).
-- **Files & changes:** `src/commands/mod.rs` exposes `pub fn dispatch(cmd: Command, store: &dyn SecretStore) -> Result<()>`. `main.rs` calls it. `tests/cli.rs` uses it directly with `MemoryStore`.
+- **Goal:** `run()` in `main.rs` constructs a `Box<dyn SecretStore>` (always `KeychainStore::from_env()` for the real binary; integration tests substitute via a `pub fn run_with_store(cli: Cli, store: &dyn SecretStore) -> Result<CommandOutcome>` shim exposed from `lib.rs`).
+- **Files & changes:** `src/commands/mod.rs` exposes `pub fn dispatch(cmd: Command, store: &dyn SecretStore) -> Result<CommandOutcome>`. `main.rs` calls it and performs the final `std::process::exit` only after dispatch returns. `tests/cli.rs` uses dispatch directly with `MemoryStore` and asserts returned exit codes without killing the test process.
+- **Code shape:**
+  ```rust
+  pub enum CommandOutcome {
+      Success,
+      ExitCode(i32),
+  }
+  ```
 
 ### E.2 — `set`
 
@@ -88,7 +95,8 @@ Each PRD acceptance criterion (lines 407–428 of `docs/prd-ticket.md`) is testa
 ### E.7 — `load`
 
 - **Files & changes:** `src/commands/load.rs`. Read file, `dotenv::parse`, surface rejected names and parse errors to stderr without values. Determine selector:
-  - If `--all/--only/--except/--dry-run`-only is non-interactive: pick selector.
+  - If `--all/--only/--except` is present: pick selector.
+  - If only `--dry-run` is present in a non-TTY: error, because `--dry-run` changes write behavior but does not select entries.
   - In TTY with no flags: `inquire::MultiSelect::new("Select entries to import:", names).with_filter(...).prompt()` → `Interactive` selector.
   - Non-interactive with no flags: error.
 - For each resolved entry: if `--dry-run`, print `would add NAME` / `would update NAME` (decide by checking `store.list_names(profile)` once and bucketing). Otherwise call `store.set(profile, name, value)`. Never echo values.
@@ -106,7 +114,7 @@ Each PRD acceptance criterion (lines 407–428 of `docs/prd-ticket.md`) is testa
 - **Files & changes:** `src/commands/run.rs`.
 - Resolve profile env.
 - Build child via `std::process::Command`. With `--clean`, start from an empty env, then insert the safe baseline from current process env (`PATH, HOME, USER, SHELL, TERM, LANG, TMPDIR`, plus every `LC_*`), then overlay resolved profile vars. Without `--clean`, inherit parent env then overlay resolved vars (`Command::envs(...)`).
-- Spawn, wait, propagate exit code via `std::process::exit(code)`.
+- Spawn, wait, return `Ok(CommandOutcome::ExitCode(code))`. If the child terminates by signal and has no numeric code, return `Ok(CommandOutcome::ExitCode(1))` with a concise diagnostic. Only `main.rs` calls `std::process::exit`.
 
 ### E.11 — `completions`
 
@@ -130,7 +138,7 @@ Each PRD acceptance criterion (lines 407–428 of `docs/prd-ticket.md`) is testa
 - Use `MemoryStore` directly via `commands::dispatch`. Cover:
   - `set` happy path + invalid name + invalid profile
   - `get` returns value via overlay; `get` missing → `NotFound`
-  - `rm` of missing → returns `false` → handler exits non-zero (assert via capturing the `ShhError`)
+  - `rm` of missing → returns an exit-code outcome or typed error that `main.rs` maps to non-zero
   - `ls` source annotation for all three cases (`default`, `<profile>`, `<profile> overrides default`)
   - `load` with `--only`, `--except`, `--all`, `--dry-run` against a temp `.env` file
   - `export` output exactly matches `export NAME='value'` with quoting

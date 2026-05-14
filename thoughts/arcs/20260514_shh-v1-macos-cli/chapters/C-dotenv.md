@@ -5,7 +5,7 @@
 
 ## Executive summary
 
-Implement the precise dotenv subset declared in the PRD and the selection logic used by `shh load`. Pure module — no IO of the secret store, no terminal interaction. Values must never escape to logs.
+Implement the precise dotenv subset declared in the PRD and the selection logic used by `shh load`. Pure module — no IO of the secret store, no terminal interaction. Uses A's env-name validator. Values must never escape to logs.
 
 Parser tradeoffs require judgment around edge cases (quoting, line continuation, interpolation order). This chapter is conscious because subtle parser bugs would corrupt secret import silently.
 

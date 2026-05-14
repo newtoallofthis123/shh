@@ -5,7 +5,7 @@
 
 ## Executive summary
 
-Real macOS Keychain implementation of `SecretStore` using the `security-framework` crate. Honors `SHH_KEYCHAIN` (`file` | `data-protection`, default `file`) and `SHH_SERVICE_PREFIX` (default `shh`). Items are stored as generic password items with `service = <prefix>:<profile>`, `account = <NAME>`, `password = <value>`.
+Real macOS Keychain implementation of `SecretStore` using `security-framework` 3.x. Honors `SHH_KEYCHAIN` (`file` | `data-protection`, default `file`) and `SHH_SERVICE_PREFIX` (default `shh`). Items are stored as generic password items with `service = <prefix>:<profile>`, `account = <NAME>`, `password = <value>`.
 
 This is conscious because:
 - Two backends with different APIs (legacy `SecKeychain*` vs `kSecUseDataProtectionKeychain`).
@@ -23,7 +23,7 @@ This is conscious because:
 - `set/get/delete` correctly round-trip values for both backends in a manual smoke run against a reserved profile.
 - `list_names(profile)` and `list_profiles()` use `SecItemCopyMatching` with `kSecReturnAttributes = true` and `kSecReturnData = false` — verified by code review of the call sites: no `kSecReturnData = true` path is taken from these two functions.
 - `list_profiles` enumerates all `kSecClassGenericPassword` items, filters service strings starting with `<prefix>:`, extracts and dedups the suffix.
-- `update` semantics: `set` on an existing `(service, account)` updates the password (`SecItemUpdate`) — does not duplicate.
+- `update` semantics: `set` on an existing `(service, account)` updates the password — does not duplicate. For the helper path, verify `set_generic_password_options` preserves the documented create-or-update behavior in both file and data-protection modes.
 - `delete` returns `Ok(false)` when nothing matched (not `Err`), so handler can map to non-zero exit per PRD `rm`.
 - `errSecUserCanceled` and `errSecAuthFailed` map to `ShhError::KeychainDenied`; `errSecItemNotFound` maps to `Ok(None)`/`Ok(false)`/empty list as appropriate; everything else maps to `ShhError::Keychain(string)`.
 - No panics on any error path.
@@ -63,7 +63,7 @@ This is conscious because:
 - **Goal:** Implement the three value operations using `security-framework`.
 - **Files & changes:** continue in `src/store/keychain.rs`.
 - **For file mode:** use `security_framework::passwords::{set_generic_password, get_generic_password, delete_generic_password}`. These convert macOS errors to `security_framework::base::Error` — match on `code()` against `errSecItemNotFound (-25300)`, `errSecUserCanceled (-128)`, `errSecAuthFailed (-25293)`.
-- **For data-protection mode:** use `security_framework::item::{ItemSearchOptions, ItemAddOptions}` with `set_use_data_protection_keychain(true)`. `set` becomes `add or update` via `SecItemAdd` then on `errSecDuplicateItem` fall back to `SecItemUpdate`.
+- **For data-protection mode:** use `security_framework::passwords::PasswordOptions::new_generic_password(...)`, call `use_protected_keychain()`, then route through `set_generic_password_options`, `generic_password`, and `delete_generic_password_options`. These are the documented 3.x helpers for generic passwords in the data-protection keychain. Do not use a nonexistent `set_use_data_protection_keychain(true)` method.
 - **Code (file mode, get):**
   ```rust
   fn get_file(&self, profile: &str, name: &str) -> Result<Option<String>> {
@@ -90,7 +90,7 @@ This is conscious because:
       let mut opts = ItemSearchOptions::new();
       opts.class(ItemClass::generic_password()).load_attributes(true).limit(i32::MAX as i64);
       if matches!(self.mode, Mode::DataProtection) {
-          opts.set_use_data_protection_keychain(true);
+          opts.ignore_legacy_keychains();
       }
       let results = match opts.search() {
           Ok(r) => r,
@@ -112,7 +112,7 @@ This is conscious because:
       Ok(names)
   }
   ```
-  - **Critical:** verify by reading the `security-framework` crate API actually used (`ItemSearchOptions::load_attributes` is the method name; double-check at implementation time — if the crate version exposes a different setter name, switch to it. Do not invent options.)
+  - **Critical:** verify by compiling against `security-framework` 3.x before writing command handlers. `ItemSearchOptions::load_attributes` and `ignore_legacy_keychains` exist in current 3.x docs; `set_use_data_protection_keychain` does not.
   - `list_profiles` is the same shape but filters by service-prefix `<prefix>:` and extracts the suffix.
 - Both functions MUST NOT call any API that asks for the password data. Adding such a call would trigger a Keychain prompt and break the PRD acceptance criteria for `ls` and `profiles`.
 

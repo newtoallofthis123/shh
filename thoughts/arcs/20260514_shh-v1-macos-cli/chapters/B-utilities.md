@@ -5,42 +5,26 @@
 
 ## Executive summary
 
-Pure functions used by every command: env-name validation, profile-slug validation (including reserved slugs), POSIX single-quote escaping, and the `default`-plus-overlay profile resolver. All exhaustively unit-tested.
+Pure functions used by every command after the foundation validator exists: profile-slug validation (including reserved slugs), POSIX single-quote escaping, and the `default`-plus-overlay profile resolver. All exhaustively unit-tested.
 
 ## Files touched
 
-- `src/env.rs` (create)
+- `src/env.rs` (extend)
 - `src/profile.rs` (create)
 - `src/lib.rs` (extend with `pub mod env; pub mod profile;`)
 
 ## Success criteria
 
-- `is_valid_env_name` rejects empty, leading-digit, names containing `=`, whitespace, hyphens, or any char outside `[A-Za-z_][A-Za-z0-9_]*`.
 - `is_valid_profile_slug` accepts ASCII letters/digits/`.`/`_`/`-`. Rejects names containing `:` (PRD constraint), empty strings, and pure whitespace. Accepts reserved `__shh_doctor__` and `__shh_smoke__`.
 - `posix_quote` wraps any value in single quotes and escapes embedded `'` as `'\''`. Round-trips through `sh -c "echo $(printf %s "$quoted")"`.
 - `resolve_profile(store, Some("work"))` returns the union of `default` keys and `work` keys, with `work` overriding `default`.
 - `resolve_profile(store, None)` returns only the `default` map.
 - `resolve_with_sources(store, "work")` returns each name annotated with `Source::Default`, `Source::Profile`, or `Source::Override` for use by `shh ls -p work`.
-- 100% of validation, quoting, and resolver behaviors covered by `#[cfg(test)]` tests using `MemoryStore`.
+- 100% of profile validation, quoting, and resolver behaviors covered by tests using `MemoryStore`.
 
 ## Phases
 
-### B.1 — Env-name validation
-
-- **Goal:** Single function used by `set`, `load`, `export`, `run`.
-- **Files & changes:** `src/env.rs::is_valid_env_name(name: &str) -> bool`.
-- **Code:**
-  ```rust
-  pub fn is_valid_env_name(name: &str) -> bool {
-      let mut chars = name.chars();
-      let Some(first) = chars.next() else { return false; };
-      if !(first.is_ascii_alphabetic() || first == '_') { return false; }
-      chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-  }
-  ```
-  - Tests: empty, `"FOO"`, `"_FOO"`, `"1FOO"`, `"FOO-BAR"`, `"FOO BAR"`, `"FOO="`, unicode letters.
-
-### B.2 — Profile slug validation
+### B.1 — Profile slug validation
 
 - **Goal:** Single function used everywhere a `--profile` is consumed plus `set`, `rm`.
 - **Files & changes:** `src/profile.rs::is_valid_profile_slug(p: &str) -> bool`.
@@ -54,7 +38,7 @@ Pure functions used by every command: env-name validation, profile-slug validati
   - Note: ASCII alphanumeric + `.`, `_`, `-` only — explicitly forbids `:` per PRD (Keychain prefix delimiter).
   - Tests: `"work"`, `"default"`, `"__shh_doctor__"`, `"shh:work"` (reject — colon), `""`, `"a/b"`, `"a b"`.
 
-### B.3 — POSIX shell quoting
+### B.2 — POSIX shell quoting
 
 - **Goal:** Safe value emission for `export` and `unset`.
 - **Files & changes:** `src/env.rs::posix_quote(value: &str) -> String`.
@@ -73,7 +57,7 @@ Pure functions used by every command: env-name validation, profile-slug validati
   - Tests: empty, plain text, value containing `'`, value containing `$VAR`, `\n`, `"`, backtick, `\`.
   - Optional shell-round-trip test (`Command::new("sh").args(["-c", &format!("printf %s {}", q)])`) — skip if test env can't shell out.
 
-### B.4 — Profile resolver
+### B.3 — Profile resolver
 
 - **Goal:** Compute the effective env map for a command and (separately) the annotated view used by `ls -p`.
 - **Files & changes:**

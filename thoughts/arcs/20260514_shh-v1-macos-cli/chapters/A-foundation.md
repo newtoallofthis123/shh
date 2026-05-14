@@ -5,7 +5,7 @@
 
 ## Executive summary
 
-Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]` in-memory adapter, define error types, and lay out the clap subcommand enum with stub dispatch. No command logic, no Keychain. After this chapter, `cargo build`, `cargo test`, and `cargo run -- --help` all succeed.
+Stand up the Rust crate, define env-name validation, define the `SecretStore` trait, ship a normal in-memory adapter for tests/harnesses, define error types, and lay out the clap subcommand enum with stub dispatch. No command logic, no Keychain. After this chapter, `cargo build`, `cargo test`, and `cargo run -- --help` all succeed.
 
 ## Files touched
 
@@ -15,9 +15,10 @@ Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]`
 - `src/main.rs` (create)
 - `src/lib.rs` (create — internal use; binary re-uses it)
 - `src/cli.rs` (create)
+- `src/env.rs` (create)
 - `src/error.rs` (create)
 - `src/store/mod.rs` (create)
-- `src/store/memory.rs` (create, `#[cfg(test)]`)
+- `src/store/memory.rs` (create)
 - `.gitignore` (extend with `/target`, `Cargo.lock` kept since this is a binary crate)
 
 ## Success criteria
@@ -26,7 +27,8 @@ Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]`
 - `cargo test` runs (no tests yet beyond a trivial in-memory store smoke test) and passes.
 - `cargo run -- --help` prints help listing every subcommand from the PRD: `set`, `get`, `rm`, `ls`, `profiles`, `load`, `export`, `unset`, `run`, `doctor`, `completions`.
 - Every subcommand stub returns a clear `unimplemented in this chapter` error so dispatch wiring is provable.
-- In-memory store is gated behind `#[cfg(test)]` — `rg "memory::MemoryStore" src/` outside `#[cfg(test)]` blocks finds nothing in shipped code.
+- `is_valid_env_name` rejects empty, leading-digit, names containing `=`, whitespace, hyphens, or any char outside `[A-Za-z_][A-Za-z0-9_]*`.
+- In-memory store is available as `shh::store::memory::MemoryStore`, but the binary does not construct it. The only production store construction path remains Chapter E's `KeychainStore::from_env()`.
 
 ## Phases
 
@@ -35,7 +37,7 @@ Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]`
 - **Goal:** Single binary crate `shh` with declared dependencies, stable Rust toolchain pin.
 - **Files & changes:**
   - `Cargo.toml`: `[package] name="shh" version="0.1.0" edition="2021"`. `[[bin]] name="shh" path="src/main.rs"`. `[lib] path="src/lib.rs"`.
-  - Dependencies: `clap = { version = "4", features = ["derive"] }`, `clap_complete = "4"`, `inquire = "0.7"`, `anyhow = "1"`, `thiserror = "1"`, `security-framework = "2"` (target-gated to `cfg(target_os = "macos")` — define as a normal dep since v1 is macOS-only; gate at use-site if any docs build on other OS).
+  - Dependencies: `clap = { version = "4", features = ["derive"] }`, `clap_complete = "4"`, `inquire = "0.7"`, `anyhow = "1"`, `thiserror = "1"`, `security-framework = "3"` (target-gated to `cfg(target_os = "macos")` — define as a normal dep since v1 is macOS-only; gate at use-site if any docs build on other OS).
   - `rust-toolchain.toml`: `[toolchain] channel = "stable"`.
 - **Code:**
   ```toml
@@ -57,7 +59,7 @@ Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]`
   inquire = "0.7"
   anyhow = "1"
   thiserror = "1"
-  security-framework = "2"
+  security-framework = "3"
   ```
 
 ### A.2 — Error types
@@ -89,12 +91,27 @@ Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]`
   pub type Result<T> = std::result::Result<T, ShhError>;
   ```
 
-### A.3 — `SecretStore` trait + `#[cfg(test)]` memory store
+### A.3 — Env-name validation
 
-- **Goal:** Trait that command handlers depend on. Test-only `MemoryStore`.
+- **Goal:** Single function used by `set`, `load`, `export`, and `run`.
+- **Files & changes:** `src/env.rs::is_valid_env_name(name: &str) -> bool`.
+- **Code:**
+  ```rust
+  pub fn is_valid_env_name(name: &str) -> bool {
+      let mut chars = name.chars();
+      let Some(first) = chars.next() else { return false; };
+      if !(first.is_ascii_alphabetic() || first == '_') { return false; }
+      chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+  }
+  ```
+  - Tests: empty, `"FOO"`, `"_FOO"`, `"1FOO"`, `"FOO-BAR"`, `"FOO BAR"`, `"FOO="`, unicode letters.
+
+### A.4 — `SecretStore` trait + memory store
+
+- **Goal:** Trait that command handlers depend on. Memory store is a normal adapter for unit/integration tests and local harnesses.
 - **Files & changes:**
   - `src/store/mod.rs`: trait + re-exports.
-  - `src/store/memory.rs`: `MemoryStore` behind `#[cfg(test)]` — back with `Mutex<BTreeMap<(String,String), String>>`.
+  - `src/store/memory.rs`: `MemoryStore` backed by `Mutex<BTreeMap<(String,String), String>>`.
 - **Code:**
   ```rust
   // src/store/mod.rs
@@ -108,13 +125,12 @@ Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]`
       fn list_profiles(&self) -> Result<Vec<String>>;
   }
 
-  #[cfg(test)]
   pub mod memory;
   ```
   - Memory store: simple `BTreeMap`, returns `NotFound`-equivalent semantics correctly (`delete` returns `false` when missing; `get` returns `Ok(None)`).
   - Include a smoke unit test in `src/store/memory.rs` exercising set/get/delete/list_names/list_profiles.
 
-### A.4 — CLI model
+### A.5 — CLI model
 
 - **Goal:** Clap derive enum mirroring the PRD command surface. No handler logic.
 - **Files & changes:** `src/cli.rs` exports `Cli` and `Command` enums.
@@ -167,11 +183,11 @@ Stand up the Rust crate, define the `SecretStore` trait, ship the `#[cfg(test)]`
   - Note `value_delimiter = ','` plus repeatable `--only/--except` satisfies the PRD requirement.
   - Note `argv: Vec<String>` after `last = true` requires `--` before the child command — matches PRD.
 
-### A.5 — `main.rs` and `lib.rs` dispatch skeleton
+### A.6 — `main.rs` and `lib.rs` dispatch skeleton
 
 - **Goal:** `lib.rs` exposes modules; `main.rs` parses CLI and dispatches via a single `match` to stub handlers that return `Err(anyhow!("unimplemented in chapter A"))`. Print error to stderr and exit non-zero on `Err`.
 - **Files & changes:**
-  - `src/lib.rs`: `pub mod cli; pub mod error; pub mod store;`
+  - `src/lib.rs`: `pub mod cli; pub mod env; pub mod error; pub mod store;`
   - `src/main.rs`: parse, match, dispatch stubs; map errors to `eprintln!` + `std::process::exit(1)`.
 - **Code:**
   ```rust
