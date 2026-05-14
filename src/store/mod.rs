@@ -9,3 +9,8 @@ pub trait SecretStore: Send + Sync {
 }
 
 pub mod memory;
+
+#[cfg(target_os = "macos")]
+pub mod keychain;
+#[cfg(target_os = "macos")]
+pub use keychain::KeychainStore;
