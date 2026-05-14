@@ -2,6 +2,15 @@
 name = "shh"
 version = "0.1.0"
 edition = "2021"
+description = "Keep env-var secrets in the macOS Keychain and load them into shells or child processes on demand."
+license = "MIT"
+repository = "https://github.com/newtoallofthis123/shh"
+homepage = "https://github.com/newtoallofthis123/shh"
+readme = "README.md"
+keywords = ["keychain", "secrets", "env", "macos", "cli"]
+categories = ["command-line-utilities"]
+rust-version = "1.79"
+exclude = ["thoughts/", "docs/prototype.html"]
 
 [[bin]]
 name = "shh"
