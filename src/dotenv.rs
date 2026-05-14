@@ -242,7 +242,9 @@ fn parse_double_quoted(
                                 if nc == ':' {
                                     return Err(ParseError {
                                         line: current_line,
-                                        message: "default-value expansion '${VAR:-...}' is not supported".to_string(),
+                                        message:
+                                            "default-value expansion '${VAR:-...}' is not supported"
+                                                .to_string(),
                                     });
                                 }
                                 name.push(nc);
@@ -259,7 +261,8 @@ fn parse_double_quoted(
                         Some('(') => {
                             return Err(ParseError {
                                 line: current_line,
-                                message: "command substitution '$(...)' is not supported".to_string(),
+                                message: "command substitution '$(...)' is not supported"
+                                    .to_string(),
                             });
                         }
                         _ => {
@@ -302,8 +305,7 @@ fn parse_double_quoted(
         // raw newline inside "..." (common dotenv behavior). Append \n only
         // if the previous line did not consume itself entirely via backslash
         // continuation.
-        let was_continuation = consumed_to == Some(current.len())
-            && current.ends_with('\\');
+        let was_continuation = consumed_to == Some(current.len()) && current.ends_with('\\');
         if !was_continuation {
             buf.push('\n');
         }
@@ -453,7 +455,10 @@ pub fn select<'a>(
             }
             let wanted: std::collections::HashSet<&str> =
                 names.iter().map(|s| s.as_str()).collect();
-            Ok(entries.iter().filter(|(n, _)| wanted.contains(n.as_str())).collect())
+            Ok(entries
+                .iter()
+                .filter(|(n, _)| wanted.contains(n.as_str()))
+                .collect())
         }
         Selector::Except(names) => {
             let excluded: std::collections::HashSet<&str> =
@@ -466,7 +471,10 @@ pub fn select<'a>(
         Selector::Interactive(names) => {
             let wanted: std::collections::HashSet<&str> =
                 names.iter().map(|s| s.as_str()).collect();
-            Ok(entries.iter().filter(|(n, _)| wanted.contains(n.as_str())).collect())
+            Ok(entries
+                .iter()
+                .filter(|(n, _)| wanted.contains(n.as_str()))
+                .collect())
         }
     }
 }
@@ -722,7 +730,10 @@ mod tests {
         let e = sample_entries();
         let names = vec!["A".to_string(), "C".to_string()];
         let r = select(&e, Selector::Only(&names)).unwrap();
-        assert_eq!(r.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["A", "C"]);
+        assert_eq!(
+            r.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["A", "C"]
+        );
     }
 
     #[test]
@@ -738,7 +749,10 @@ mod tests {
         let e = sample_entries();
         let names = vec!["B".to_string()];
         let r = select(&e, Selector::Except(&names)).unwrap();
-        assert_eq!(r.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["A", "C"]);
+        assert_eq!(
+            r.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["A", "C"]
+        );
     }
 
     #[test]
@@ -754,6 +768,9 @@ mod tests {
         let e = sample_entries();
         let names = vec!["A".to_string(), "ghost".to_string()];
         let r = select(&e, Selector::Interactive(&names)).unwrap();
-        assert_eq!(r.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["A"]);
+        assert_eq!(
+            r.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["A"]
+        );
     }
 }

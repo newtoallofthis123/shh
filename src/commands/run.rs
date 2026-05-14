@@ -22,7 +22,9 @@ pub fn run(args: RunArgs, store: &dyn SecretStore) -> Result<CommandOutcome> {
         }
     }
     if args.argv.is_empty() {
-        eprintln!("error: missing child command. Usage: shh run [-p PROFILE] [--clean] -- CMD [ARGS...]");
+        eprintln!(
+            "error: missing child command. Usage: shh run [-p PROFILE] [--clean] -- CMD [ARGS...]"
+        );
         return Ok(CommandOutcome::ExitCode(2));
     }
 

@@ -31,8 +31,19 @@ pub enum CommandOutcome {
 /// Dispatch a parsed command against the given store.
 pub fn dispatch(cmd: Command, store: &dyn SecretStore) -> Result<CommandOutcome> {
     match cmd {
-        Command::Set { name, value, profile } => {
-            set::run(set::SetArgs { name, value, profile }, store)?;
+        Command::Set {
+            name,
+            value,
+            profile,
+        } => {
+            set::run(
+                set::SetArgs {
+                    name,
+                    value,
+                    profile,
+                },
+                store,
+            )?;
             Ok(CommandOutcome::Success)
         }
         Command::Get { name, profile } => get::run(name, profile.as_deref(), store),
@@ -65,7 +76,11 @@ pub fn dispatch(cmd: Command, store: &dyn SecretStore) -> Result<CommandOutcome>
         ),
         Command::Export { profile } => export::run(profile.as_deref(), store),
         Command::Unset { profile } => unset::run(profile.as_deref(), store),
-        Command::Run { profile, clean, argv } => run::run(
+        Command::Run {
+            profile,
+            clean,
+            argv,
+        } => run::run(
             run::RunArgs {
                 profile,
                 clean,

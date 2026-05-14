@@ -89,7 +89,9 @@ fn detect_signing_identity() -> SigningIdentity {
         Ok(p) => p,
         Err(_) => return SigningIdentity::Unknown,
     };
-    let out = Command::new("codesign").args(["-dvv", &exe.to_string_lossy()]).output();
+    let out = Command::new("codesign")
+        .args(["-dvv", &exe.to_string_lossy()])
+        .output();
     let out = match out {
         Ok(o) => o,
         Err(_) => return SigningIdentity::Unknown,

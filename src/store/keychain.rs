@@ -57,7 +57,10 @@ impl KeychainStore {
     }
 
     pub fn new(prefix: impl Into<String>, mode: Mode) -> Self {
-        Self { prefix: prefix.into(), mode }
+        Self {
+            prefix: prefix.into(),
+            mode,
+        }
     }
 
     pub fn mode(&self) -> Mode {
