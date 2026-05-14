@@ -1,1 +1,12 @@
 docs/**/*.html
+
+# Rust
+/target
+
+# Nix
+result
+result-*
+.direnv/
+
+# Editors
+.DS_Store
