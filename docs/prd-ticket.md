@@ -28,6 +28,7 @@ Secondary user: a developer running agents, CLIs, scripts, or local apps that ne
 - Use macOS Keychain directly through Security.framework bindings.
 - Keep values off disk and avoid accidental TTY disclosure.
 - Support an implicit `default` profile and named profile overlays.
+- Make Keychain permission behavior understandable with clear first-use messaging and diagnostics.
 
 ## Non-Goals
 
@@ -55,6 +56,9 @@ Secondary user: a developer running agents, CLIs, scripts, or local apps that ne
 - `set <NAME> <VALUE>` ships in v1, but stdin and hidden prompt input are also supported.
 - `ls -p <profile>` annotates each effective name with its source profile and override status.
 - `load --only` and `load --except` accept both comma-separated names and repeated flags.
+- v1 uses normal macOS Keychain permission behavior first. Do not require explicit ACL customization for the initial implementation.
+- Release builds should be signed so macOS can identify the `shh` binary consistently across runs.
+- Development can use an in-memory backend or a dev-only Keychain service prefix to avoid touching real user secrets.
 
 ## Command Scope
 
@@ -69,6 +73,7 @@ shh profiles
 shh load <PATH> [-p <profile>] [--all] [--only <names>...] [--except <names>...] [--dry-run]
 shh export [-p <profile>]
 shh run [-p <profile>] -- <cmd> [args...]
+shh doctor keychain
 ```
 
 ## Functional Requirements
@@ -159,19 +164,29 @@ eval "$(shh export -p work)"
 - Does not mutate the parent shell.
 - Returns the child command's exit code.
 
+### `doctor keychain`
+
+- Performs a local macOS-only Keychain smoke test.
+- Writes, reads, lists, and deletes a test-scoped entry.
+- Uses a reserved profile such as `__shh_doctor__`.
+- Never touches non-test profiles.
+- Reports whether Keychain access works and whether macOS permission was denied or cancelled.
+- Explains that macOS may prompt for access and that choosing "Always Allow" permits the current signed `shh` binary to read its own items without repeated prompts.
+
 ## Technical Plan
 
 Plan:
 1. Create Rust crate structure in `Cargo.toml` and `src/main.rs` - establishes the single-binary CLI entrypoint.
 2. Add CLI command model in `src/cli.rs` - centralizes `clap` parsing and keeps command dispatch testable.
 3. Add env-name validation and shell quoting in `src/env.rs` - shared by `set`, `load`, `export`, and `run`.
-4. Add Keychain adapter in `src/keychain.rs` - isolates macOS Security.framework calls behind a small storage trait.
+4. Add storage adapters in `src/store/` - isolates the real macOS Keychain adapter and the in-memory dev/test adapter behind a small storage trait.
 5. Add profile resolver in `src/profile.rs` - implements `default` plus named-profile overlay behavior.
 6. Add dotenv parser/import selector in `src/dotenv.rs` - supports selective `.env` loading without leaking values.
 7. Add command handlers in `src/commands/` - keeps each command narrow and independently testable.
-8. Add Nix development environment in `flake.nix` - provides Rust, cargo tooling, Security.framework access on macOS, and `just`.
-9. Add `justfile` commands - gives contributors a small command surface for setup, build, test, lint, format, run, and Keychain smoke tests.
-10. Add integration tests or mocked storage command tests in `tests/` - verifies CLI behavior without depending on a real user's Keychain.
+8. Add Keychain diagnostics in `doctor keychain` - gives users and development builds a safe way to verify real Keychain behavior.
+9. Add Nix development environment in `flake.nix` - provides Rust, cargo tooling, Security.framework access on macOS, and `just`.
+10. Add `justfile` commands - gives contributors a small command surface for setup, build, test, lint, format, run, and Keychain smoke tests.
+11. Add integration tests or mocked storage command tests in `tests/` - verifies CLI behavior without depending on a real user's Keychain.
 
 Decisions:
 - Ship positional `set <NAME> <VALUE>` plus stdin and hidden prompt input.
@@ -182,16 +197,21 @@ Decisions:
 - Use `nixpkgs-unstable` for the Nix flake input.
 - Use the Rust toolchain from `nixpkgs-unstable` directly unless a future reproducibility issue requires an overlay.
 - Use `dialoguer` for v1 interactive prompts unless a small implementation spike exposes a blocker.
+- Use standard Keychain access first. Explicit ACL customization is not a v1 requirement.
+- Support a development-only in-memory backend with `SHH_BACKEND=memory`.
+- Support a development-only service prefix override with `SHH_SERVICE_PREFIX=shh-dev`.
+- Add `doctor keychain` as the user-facing way to validate Keychain access and explain macOS prompts.
 
 Open questions:
 - None for the current PRD pass.
 
 Risk:
-- Keychain ACL behavior may prompt more often than expected, especially after binary updates or unsigned local builds.
+- macOS may prompt more often than expected, especially after binary updates or unsigned local builds.
 - Keychain profile enumeration may be slower or less filterable than desired.
 - Shell quoting mistakes could break `eval "$(shh export)"` or expose malformed values.
 - Dotenv parsing can sprawl; v1 should intentionally avoid interpolation and multiline values unless required.
 - `run` still inherits unrelated secrets already present in the parent environment.
+- Development builds can accidentally touch real Keychain entries unless tests default to the memory store and smoke tests use reserved profiles.
 
 ## Suggested Internal Interfaces
 
@@ -214,6 +234,77 @@ fn resolve_profile(store: &dyn SecretStore, profile: Option<&str>) -> Result<Pro
 ```
 
 Keep command handlers dependent on `SecretStore` rather than directly on Keychain so behavior can be tested with an in-memory store.
+
+## Keychain and ACL Policy
+
+`shh` stores secrets as macOS generic password items through public Security.framework APIs. The intended item identity is:
+
+```text
+service: shh:<profile>
+account: <ENV_NAME>
+value: <secret>
+```
+
+For v1, implement normal Keychain storage and retrieval before attempting explicit ACL customization. macOS already mediates access to Keychain items. When `shh` reads an item, the system may prompt the user to allow access. If the user chooses "Always Allow", macOS can trust the current `shh` binary for future reads of that item.
+
+Do not make explicit ACL mutation a hard v1 dependency. The older macOS ACL APIs are finicky around signing identity, iCloud/data-protection Keychain behavior, and binary updates. The v1 success path is:
+
+- Use Security.framework item APIs for add, update, lookup, list, and delete.
+- Let macOS handle first-use permission prompts.
+- Sign release builds so the trusted application identity is stable.
+- Add diagnostics and clear messaging when access is denied, cancelled, or blocked.
+
+### Safety Guarantees
+
+- `shh` must not modify system Keychain settings.
+- `shh` must not change global macOS security settings.
+- `shh` must not install a daemon, login item, kernel extension, or background agent.
+- Deletes must be scoped to `service = shh:<profile>` and a specific account name, except reserved smoke-test cleanup.
+- Test and diagnostic profiles must use reserved names such as `__shh_smoke__` and `__shh_doctor__`.
+- User-facing output must never include secret values unless the command is explicitly designed to write to a non-TTY pipe.
+
+### Development Modes
+
+Most development and tests should avoid the real Keychain.
+
+Supported development knobs:
+
+```text
+SHH_BACKEND=memory
+SHH_SERVICE_PREFIX=shh-dev
+```
+
+- `SHH_BACKEND=memory` uses an in-memory store for command behavior tests and local CLI iteration.
+- `SHH_SERVICE_PREFIX=shh-dev` uses the real Keychain but stores entries under a dev prefix instead of `shh:<profile>`.
+- Release builds should ignore or avoid documenting development-only knobs for normal users.
+- Real Keychain integration is still tested through `just smoke-keychain` and `shh doctor keychain`.
+
+### User Messaging
+
+After storing a value, print a concise explanation without revealing the value:
+
+```text
+Stored OPENAI_API_KEY in macOS Keychain under profile work.
+macOS may ask for permission the first time shh reads this item.
+Choose "Always Allow" to avoid repeated prompts for this signed shh binary.
+```
+
+When access is denied or cancelled, show actionable guidance:
+
+```text
+Keychain access was denied.
+Rerun the command and approve the macOS prompt, or inspect the item in Keychain Access:
+service shh:work, account OPENAI_API_KEY.
+```
+
+### Future ACL Investigation
+
+Only investigate explicit ACL customization after the standard signed-binary flow is implemented and smoke-tested. The investigation should answer:
+
+- Does creating an item with explicit trusted-app access reduce prompts reliably?
+- Does that trust survive release binary updates?
+- Does it behave differently for unsigned dev builds, ad-hoc signed builds, and Developer ID signed builds?
+- Does it interact poorly with iCloud Keychain or data-protection Keychain behavior?
 
 ## Developer Tooling
 
@@ -289,6 +380,8 @@ Recommendation: use `dialoguer` for v1. It covers hidden input and checklist imp
 - `shh load .env -p work --except PORT,DEBUG --dry-run` excludes both names and writes nothing.
 - `shh ls -p work` lists effective names without values and annotates default/profile/override source.
 - `shh profiles` lists profiles discovered from Keychain services.
+- `shh doctor keychain` writes, reads, lists, and deletes only a reserved diagnostic entry.
+- Keychain denial and user-cancelled permission flows produce clear non-secret error messages.
 - `nix develop` opens a shell with the Rust toolchain and `just` available.
 - `just ci` runs format checks, lint checks, and tests.
 - `just smoke-keychain` verifies the real Keychain adapter on macOS without leaving test entries behind.
@@ -304,21 +397,24 @@ Recommendation: use `dialoguer` for v1. It covers hidden input and checklist imp
    - Verify: unit tests cover invalid names, override collisions, and shell-special values.
 
 3. Keychain storage adapter
-   - Verify: local macOS smoke test can set, get, list, and delete one entry.
+   - Verify: local macOS smoke test can set, get, list, and delete one reserved entry.
 
-4. Safe output commands
+4. Keychain diagnostics and messaging
+   - Verify: `shh doctor keychain` uses only a reserved profile and reports permission failures without leaking values.
+
+5. Safe output commands
    - Verify: `get` and `export` refuse TTY output and work through pipes.
 
-5. `.env` import flow
+6. `.env` import flow
    - Verify: parser tests pass, `--all`, `--only`, `--except`, and `--dry-run` behave as specified.
 
-6. `run` command
+7. `run` command
    - Verify: child process receives overlaid env and returns the child exit code.
 
-7. Packaging polish
+8. Packaging polish
    - Verify: release build produces one binary and README quickstart matches actual behavior.
 
-8. Nix and Justfile developer workflow
+9. Nix and Justfile developer workflow
    - Verify: `nix develop`, `just ci`, and `just smoke-keychain` work on macOS.
 
 ## Future Follow-Ups
@@ -327,3 +423,4 @@ Recommendation: use `dialoguer` for v1. It covers hidden input and checklist imp
 - `unset` helper output for deactivating loaded secrets in the current shell.
 - Optional shell completions.
 - Broader dotenv syntax if real `.env` files require it.
+- Explicit Keychain ACL customization if standard signed-binary Keychain behavior causes too many prompts.
