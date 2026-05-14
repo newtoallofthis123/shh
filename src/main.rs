@@ -1,29 +1,34 @@
 use anyhow::Result;
 use clap::Parser;
-use shh::cli::{Cli, Command};
+use shh::cli::Cli;
+use shh::commands::{dispatch, CommandOutcome};
+use shh::error::ShhError;
+use shh::store::KeychainStore;
 
 fn main() {
-    if let Err(e) = run() {
-        eprintln!("error: {e:#}");
-        std::process::exit(1);
-    }
+    let code = match run() {
+        Ok(CommandOutcome::Success) => 0,
+        Ok(CommandOutcome::ExitCode(c)) => c,
+        Err(e) => {
+            // Map specific typed errors to PRD-prescribed guidance.
+            if let Some(shh_err) = e.downcast_ref::<ShhError>() {
+                if matches!(shh_err, ShhError::KeychainDenied) {
+                    eprintln!("Keychain access was denied.");
+                    eprintln!(
+                        "Rerun the command and approve the macOS prompt, or inspect the item in Keychain Access."
+                    );
+                    std::process::exit(1);
+                }
+            }
+            eprintln!("error: {e:#}");
+            1
+        }
+    };
+    std::process::exit(code);
 }
 
-fn run() -> Result<()> {
+fn run() -> Result<CommandOutcome> {
     let cli = Cli::parse();
-    match cli.command {
-        Command::Set { .. } => anyhow::bail!("set: unimplemented in this chapter"),
-        Command::Get { .. } => anyhow::bail!("get: unimplemented in this chapter"),
-        Command::Rm { .. } => anyhow::bail!("rm: unimplemented in this chapter"),
-        Command::Ls { .. } => anyhow::bail!("ls: unimplemented in this chapter"),
-        Command::Profiles => anyhow::bail!("profiles: unimplemented in this chapter"),
-        Command::Load { .. } => anyhow::bail!("load: unimplemented in this chapter"),
-        Command::Export { .. } => anyhow::bail!("export: unimplemented in this chapter"),
-        Command::Unset { .. } => anyhow::bail!("unset: unimplemented in this chapter"),
-        Command::Run { .. } => anyhow::bail!("run: unimplemented in this chapter"),
-        Command::Doctor { .. } => anyhow::bail!("doctor: unimplemented in this chapter"),
-        Command::Completions { .. } => {
-            anyhow::bail!("completions: unimplemented in this chapter")
-        }
-    }
+    let store = KeychainStore::from_env();
+    Ok(dispatch(cli.command, &store)?)
 }
