@@ -1,7 +1,7 @@
 # shh v1 — macOS Keychain-backed env-var secrets CLI
 
 **Date:** 2026-05-14
-**Status:** draft
+**Status:** reviewed
 **Worklog:** worklog.md
 
 ## Context

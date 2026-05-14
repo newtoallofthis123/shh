@@ -1,4 +1,3 @@
-use crate::env::posix_quote;
 use crate::error::{Result, ShhError};
 use crate::profile::{is_valid_profile_slug, resolve};
 use crate::store::SecretStore;
@@ -21,7 +20,7 @@ pub fn run(profile: Option<&str>, store: &dyn SecretStore) -> Result<CommandOutc
     }
     let env = resolve(store, profile)?;
     for (name, value) in &env.vars {
-        println!("export {name}={}", posix_quote(value));
+        println!("export {name}={value}");
     }
     Ok(CommandOutcome::Success)
 }

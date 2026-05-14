@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::dotenv::{parse, select, Selector};
 use crate::error::{Result, ShhError};
@@ -24,7 +24,13 @@ pub fn run(args: LoadArgs, store: &dyn SecretStore) -> Result<CommandOutcome> {
         return Err(ShhError::InvalidProfile(profile.to_string()));
     }
 
-    let body = std::fs::read_to_string(&args.path)?;
+    let path = absolutize(&args.path)?;
+    let body = std::fs::read_to_string(&path).map_err(|e| {
+        ShhError::Io(std::io::Error::new(
+            e.kind(),
+            format!("{}: {}", path.display(), e),
+        ))
+    })?;
     let outcome = parse(&body);
 
     for rej in &outcome.rejected {
@@ -55,7 +61,7 @@ pub fn run(args: LoadArgs, store: &dyn SecretStore) -> Result<CommandOutcome> {
     } else if is_stdin_tty() {
         let names: Vec<String> = outcome.entries.iter().map(|(n, _)| n.clone()).collect();
         if names.is_empty() {
-            eprintln!("error: no valid entries found in {}", args.path.display());
+            eprintln!("error: no valid entries found in {}", path.display());
             return Ok(CommandOutcome::ExitCode(2));
         }
         let picked = inquire::MultiSelect::new("Select entries to import:", names)
@@ -87,4 +93,15 @@ pub fn run(args: LoadArgs, store: &dyn SecretStore) -> Result<CommandOutcome> {
     }
 
     Ok(CommandOutcome::Success)
+}
+
+fn absolutize(path: &Path) -> Result<PathBuf> {
+    let s = path.to_str().ok_or_else(|| {
+        ShhError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("path is not valid UTF-8: {}", path.display()),
+        ))
+    })?;
+    let expanded = shellexpand::tilde(s);
+    Ok(std::path::absolute(expanded.as_ref())?)
 }

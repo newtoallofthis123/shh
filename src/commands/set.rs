@@ -44,7 +44,5 @@ pub fn run(args: SetArgs, store: &dyn SecretStore) -> Result<()> {
         "Stored {} in macOS Keychain under profile {}.",
         args.name, profile
     );
-    println!("macOS may ask for permission the first time shh reads this item.");
-    println!("Choose \"Always Allow\" to avoid repeated prompts for this signed shh binary.");
     Ok(())
 }

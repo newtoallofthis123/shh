@@ -17,3 +17,4 @@ inquire = "0.7"
 anyhow = "1"
 thiserror = "1"
 security-framework = { version = "3", features = ["OSX_10_15"] }
+shellexpand = "3"
