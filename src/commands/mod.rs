@@ -74,7 +74,7 @@ pub fn dispatch(cmd: Command, store: &dyn SecretStore) -> Result<CommandOutcome>
             },
             store,
         ),
-        Command::Export { profile } => export::run(profile.as_deref(), store),
+        Command::Export { profile, format } => export::run(profile.as_deref(), format, store),
         Command::Unset { profile } => unset::run(profile.as_deref(), store),
         Command::Run {
             profile,

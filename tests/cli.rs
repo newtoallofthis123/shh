@@ -239,7 +239,14 @@ fn load_dry_run_writes_nothing() {
 fn export_runs_when_stdout_not_tty() {
     let store = MemoryStore::new();
     store.set("default", "A", "hello").unwrap();
-    let outcome = dispatch(Command::Export { profile: None }, &store).unwrap();
+    let outcome = dispatch(
+        Command::Export {
+            profile: None,
+            format: None,
+        },
+        &store,
+    )
+    .unwrap();
     assert_eq!(outcome, CommandOutcome::Success);
 }
 

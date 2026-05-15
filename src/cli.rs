@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -47,6 +47,8 @@ pub enum Command {
     Export {
         #[arg(short = 'p', long)]
         profile: Option<String>,
+        #[arg(long)]
+        format: Option<ExportFormat>,
     },
     Unset {
         #[arg(short = 'p', long)]
@@ -72,4 +74,10 @@ pub enum Command {
 #[derive(Subcommand, Debug)]
 pub enum DoctorCmd {
     Keychain,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ExportFormat {
+    Json,
+    Dotenv,
 }

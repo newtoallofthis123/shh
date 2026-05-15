@@ -140,10 +140,12 @@ shh rm OLD_KEY -p work
 eval "$(shh export)"                            # 'default' profile
 eval "$(shh export -p work)"                    # 'work' overlays 'default'
 eval "$(shh unset -p work)"                     # remove those names from the current shell
+shh export --format json | jq .                 # JSON object for tools
+shh export -p work --format dotenv > .env.work  # dotenv for non-shell consumers
 ```
 
 `export` and `unset` refuse to write to a terminal — they're meant to be
-piped through `eval`.
+piped through `eval` or redirected to another consumer.
 
 ### Running a child process
 
@@ -238,7 +240,6 @@ v1 is intentionally tight. Things that might land in v1.x:
 
 - TouchID / Apple Watch unlock for `get` / `export` (`SecAccessControl` flags).
 - Linux backend (Secret Service / `libsecret`).
-- `shh export --format json|dotenv` for non-shell consumers.
 - Per-item TTL / expiry attributes.
 
 If one of these is a blocker for you, open an issue and say so — that's

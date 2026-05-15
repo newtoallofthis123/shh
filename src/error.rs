@@ -14,6 +14,8 @@ pub enum ShhError {
     Keychain(String),
     #[error("dotenv parse error at line {line}: {message}")]
     DotenvParse { line: usize, message: String },
+    #[error("cannot export {name} as dotenv: value contains characters this dotenv format cannot represent safely")]
+    DotenvExport { name: String },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
