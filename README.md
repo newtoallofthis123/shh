@@ -1,7 +1,7 @@
 # shh
 
 <p align="center">
-  <img src="assets/7.1-invideo-gpt_image_2.png" alt="shh banner" width="100%">
+  <img src="assets/banner.png" alt="shh banner" width="100%">
 </p>
 
 > Stop sourcing `.env` files. Keep your secrets where macOS already keeps them.
@@ -15,10 +15,6 @@ shh set OPENAI_API_KEY                  # hidden prompt
 eval "$(shh export -p work)"            # load the 'work' profile into the current shell
 shh run -p work --clean -- pytest       # run pytest with only profile vars + a safe baseline
 ```
-
-<p align="center">
-  <img src="assets/8.1-invideo-gpt_image_2.png" alt="shh feature overview: Keychain, profiles, and clean runs" width="100%">
-</p>
 
 ## Why this instead of `.env`?
 
@@ -117,6 +113,10 @@ security find-identity -v -p codesigning
 If you see nothing, run `just setup-codesign` once (it generates a
 self-signed cert and trusts it for code signing — you'll get one macOS
 password prompt). Then `just install` will use it forever after.
+
+<p align="center">
+  <img src="assets/features.png" alt="shh feature overview: Keychain, profiles, and clean runs" width="100%">
+</p>
 
 ## Usage
 
